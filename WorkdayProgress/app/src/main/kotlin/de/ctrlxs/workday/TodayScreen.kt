@@ -15,6 +15,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -64,7 +66,13 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 @Composable
-fun TodayScreen(week: WeekPlan, onOpenMenu: () -> Unit) {
+fun TodayScreen(
+    week: WeekPlan,
+    record: DayRecord,
+    onToggleSick: () -> Unit,
+    onToggleClockOut: () -> Unit,
+    onOpenMenu: () -> Unit,
+) {
     var now by remember { mutableStateOf(LocalTime.now()) }
     var today by remember { mutableStateOf(LocalDate.now()) }
     LaunchedEffect(Unit) {
@@ -75,7 +83,8 @@ fun TodayScreen(week: WeekPlan, onOpenMenu: () -> Unit) {
         }
     }
 
-    val blocks = week.days[today.dayOfWeek] ?: emptyList()
+    val planned = week.days[today.dayOfWeek] ?: emptyList()
+    val blocks = effectiveBlocks(planned, record.clockOut)
     val status = computeStatus(blocks, now, week.minutesPerPatient)
 
     Column(
@@ -117,9 +126,36 @@ fun TodayScreen(week: WeekPlan, onOpenMenu: () -> Unit) {
 
         Spacer(Modifier.height(32.dp))
 
-        when (status.phase) {
-            DayPhase.OFF -> OffCard()
+        when {
+            record.sick -> SickCard()
+            planned.isEmpty() -> OffCard()
+            blocks.isEmpty() -> WentHomeCard(record.clockOut ?: 0)
             else -> ProgressSection(status, blocks)
+        }
+
+        if (planned.isNotEmpty()) {
+            Spacer(Modifier.height(28.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    emoji = "🤒",
+                    label = if (record.sick) "Sick today ✓" else "I'm sick today",
+                    sub = if (record.sick) "tap to undo" else "marks today as a sick day",
+                    active = record.sick,
+                    accent = Color(0xFFF87171),
+                    onClick = onToggleSick
+                )
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    emoji = "🏠",
+                    label = record.clockOut?.let { "Out at ${formatMinutes(it)}" } ?: "Clock out",
+                    sub = if (record.clockOut != null) "tap to undo" else "going home now",
+                    active = record.clockOut != null,
+                    accent = Color(0xFFFBBF24),
+                    enabled = !record.sick,
+                    onClick = onToggleClockOut
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -357,6 +393,87 @@ private fun StatCard(
         )
         Spacer(Modifier.height(8.dp))
         content()
+    }
+}
+
+@Composable
+private fun ActionButton(
+    modifier: Modifier = Modifier,
+    emoji: String,
+    label: String,
+    sub: String,
+    active: Boolean,
+    accent: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (active) accent.copy(alpha = 0.16f) else CardColor)
+            .then(
+                if (active) Modifier.border(1.5.dp, accent, RoundedCornerShape(18.dp))
+                else Modifier
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.4f)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(emoji, fontSize = 22.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            label,
+            color = if (active) accent else TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(sub, color = TextSecondary, fontSize = 10.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun SickCard() {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(CardColor)
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("🤒", fontSize = 48.sp)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Sick today",
+            color = TextPrimary,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text("Rest up and get well soon ❤️", color = TextSecondary, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun WentHomeCard(clockOut: Int) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(CardColor)
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("🏠", fontSize = 48.sp)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Went home at ${formatMinutes(clockOut)}",
+            color = TextPrimary,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text("The rest of the day is yours.", color = TextSecondary, fontSize = 14.sp)
     }
 }
 

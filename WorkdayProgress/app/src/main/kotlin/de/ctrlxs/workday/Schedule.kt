@@ -2,7 +2,9 @@ package de.ctrlxs.workday
 
 import android.content.Context
 import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.YearMonth
 import kotlin.math.ceil
 
 /** A continuous stretch of work. Times are minutes since midnight. */
@@ -138,4 +140,110 @@ fun formatDuration(totalSeconds: Long): String {
     val h = totalSeconds / 3600
     val m = (totalSeconds % 3600) / 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/** Accepts "8", "08", "8:00", "0800", "8.00" → minutes since midnight. */
+fun parseTimeInput(input: String): Int? {
+    val s = input.trim().replace('.', ':')
+    val h: Int
+    val m: Int
+    if (':' in s) {
+        val p = s.split(":")
+        if (p.size != 2) return null
+        h = p[0].toIntOrNull() ?: return null
+        m = p[1].toIntOrNull() ?: return null
+    } else {
+        if (s.isEmpty() || s.length > 4 || s.any { !it.isDigit() }) return null
+        when (s.length) {
+            1, 2 -> { h = s.toInt(); m = 0 }
+            3 -> { h = s.take(1).toInt(); m = s.drop(1).toInt() }
+            else -> { h = s.take(2).toInt(); m = s.drop(2).toInt() }
+        }
+    }
+    return if (h in 0..23 && m in 0..59) h * 60 + m else null
+}
+
+/** Per-date attendance: sick day and/or actual clock-out time (minutes since midnight). */
+data class DayRecord(val sick: Boolean = false, val clockOut: Int? = null)
+
+class AttendanceStore(context: Context) {
+    private val prefs = context.getSharedPreferences("attendance", Context.MODE_PRIVATE)
+    private fun key(date: LocalDate) = "att_$date"
+
+    fun get(date: LocalDate): DayRecord = parse(prefs.getString(key(date), null))
+
+    fun set(date: LocalDate, record: DayRecord) {
+        if (!record.sick && record.clockOut == null) {
+            prefs.edit().remove(key(date)).apply()
+        } else {
+            val sick = if (record.sick) "1" else "0"
+            prefs.edit().putString(key(date), "$sick|${record.clockOut ?: ""}").apply()
+        }
+    }
+
+    fun month(ym: YearMonth): Map<LocalDate, DayRecord> = buildMap {
+        for (d in 1..ym.lengthOfMonth()) {
+            val date = ym.atDay(d)
+            val raw = prefs.getString(key(date), null) ?: continue
+            put(date, parse(raw))
+        }
+    }
+
+    private fun parse(raw: String?): DayRecord {
+        if (raw == null) return DayRecord()
+        val p = raw.split("|")
+        return DayRecord(sick = p.getOrNull(0) == "1", clockOut = p.getOrNull(1)?.toIntOrNull())
+    }
+}
+
+/** Truncates the planned blocks at the actual clock-out time. */
+fun effectiveBlocks(blocks: List<TimeBlock>, clockOut: Int?): List<TimeBlock> =
+    if (clockOut == null) blocks
+    else blocks.mapNotNull { b ->
+        if (clockOut <= b.start) null else TimeBlock(b.start, minOf(b.end, clockOut))
+    }
+
+data class MonthStats(
+    val workedSeconds: Long,
+    val plannedSeconds: Long,
+    val workedDays: Int,
+    val sickDays: List<LocalDate>,
+    val earlyDays: List<Pair<LocalDate, Int>>,
+)
+
+fun computeMonthStats(
+    ym: YearMonth,
+    week: WeekPlan,
+    records: Map<LocalDate, DayRecord>,
+    today: LocalDate,
+    now: LocalTime,
+): MonthStats {
+    var worked = 0L
+    var planned = 0L
+    var workedDays = 0
+    val sick = mutableListOf<LocalDate>()
+    val early = mutableListOf<Pair<LocalDate, Int>>()
+    for (d in 1..ym.lengthOfMonth()) {
+        val date = ym.atDay(d)
+        val blocks = week.days[date.dayOfWeek] ?: continue
+        if (blocks.isEmpty()) continue
+        planned += blocks.sumOf { it.duration * 60L }
+        val rec = records[date] ?: DayRecord()
+        if (rec.sick) {
+            sick += date
+            continue
+        }
+        if (date > today) continue
+        val cutoff = when {
+            rec.clockOut != null -> rec.clockOut
+            date == today -> now.toSecondOfDay() / 60
+            else -> 24 * 60
+        }
+        var dayWorked = 0L
+        for (b in blocks) dayWorked += (minOf(b.end, cutoff) - b.start).coerceAtLeast(0) * 60L
+        worked += dayWorked
+        if (dayWorked > 0) workedDays++
+        if (rec.clockOut != null && rec.clockOut < blocks.last().end) early += date to rec.clockOut
+    }
+    return MonthStats(worked, planned, workedDays, sick, early)
 }

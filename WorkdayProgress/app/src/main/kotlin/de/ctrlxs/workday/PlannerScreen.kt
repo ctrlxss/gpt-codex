@@ -1,14 +1,7 @@
 package de.ctrlxs.workday
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -29,10 +21,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,80 +42,51 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.TextStyle
 import java.util.Locale
 
-private const val AXIS_START = 6 * 60
-private const val AXIS_END = 21 * 60
+private const val AXIS_START = 5 * 60
+private const val AXIS_END = 22 * 60
 private const val SNAP = 15
 private val HOUR_HEIGHT = 56.dp
 private val AXIS_WIDTH = 40.dp
 private val GRID_HEIGHT = HOUR_HEIGHT * ((AXIS_END - AXIS_START) / 60)
 private val GridLine = Color(0xFF223051)
+private val NowRed = Color(0xFFF87171)
 
 private fun minutesToDp(minutes: Int) = HOUR_HEIGHT * ((minutes - AXIS_START) / 60f)
 
+private data class EditTarget(
+    val dow: DayOfWeek,
+    val index: Int?,
+    val startText: String,
+    val endText: String,
+)
+
 @Composable
 fun PlannerScreen(week: WeekPlan, onChange: (WeekPlan) -> Unit, onBack: () -> Unit) {
-    var selected by remember { mutableStateOf<Pair<DayOfWeek, Int>?>(null) }
+    var editing by remember { mutableStateOf<EditTarget?>(null) }
+    var now by remember { mutableStateOf(LocalTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalTime.now()
+            delay(30_000)
+        }
+    }
     val days = week.days.keys.sortedBy { it.value }
     val today = LocalDate.now().dayOfWeek
 
     fun setBlocks(dow: DayOfWeek, blocks: List<TimeBlock>) {
         onChange(week.copy(days = week.days + (dow to blocks)))
-    }
-
-    fun moveBlock(dow: DayOfWeek, index: Int, delta: Int) {
-        val list = week.days.getValue(dow)
-        val b = list.getOrNull(index) ?: return
-        val lo = list.getOrNull(index - 1)?.end ?: AXIS_START
-        val hi = list.getOrNull(index + 1)?.start ?: AXIS_END
-        if (hi - lo < b.duration) return
-        val newStart = (b.start + delta).coerceIn(lo, hi - b.duration)
-        setBlocks(dow, list.toMutableList().also { it[index] = TimeBlock(newStart, newStart + b.duration) })
-    }
-
-    fun resizeBlock(dow: DayOfWeek, index: Int, topEdge: Boolean, delta: Int) {
-        val list = week.days.getValue(dow)
-        val b = list.getOrNull(index) ?: return
-        val updated = if (topEdge) {
-            val lo = list.getOrNull(index - 1)?.end ?: AXIS_START
-            b.copy(start = (b.start + delta).coerceIn(lo, b.end - SNAP))
-        } else {
-            val hi = list.getOrNull(index + 1)?.start ?: AXIS_END
-            b.copy(end = (b.end + delta).coerceIn(b.start + SNAP, hi))
-        }
-        setBlocks(dow, list.toMutableList().also { it[index] = updated })
-    }
-
-    fun addBlock(dow: DayOfWeek, minute: Int) {
-        val list = week.days.getValue(dow)
-        var gapStart = AXIS_START
-        var gapEnd = AXIS_END
-        for (b in list) {
-            if (minute < b.start) { gapEnd = b.start; break }
-            if (minute < b.end) return
-            gapStart = b.end
-        }
-        if (gapEnd - gapStart < SNAP) return
-        var start = (minute / SNAP) * SNAP
-        start = start.coerceIn(gapStart, maxOf(gapStart, gapEnd - 60))
-        val end = minOf(start + 60, gapEnd)
-        val newList = (list + TimeBlock(start, end)).sortedBy { it.start }
-        setBlocks(dow, newList)
-        selected = dow to newList.indexOfFirst { it.start == start && it.end == end }
-    }
-
-    fun deleteSelected() {
-        val (dow, i) = selected ?: return
-        val list = week.days.getValue(dow)
-        if (i in list.indices) setBlocks(dow, list.filterIndexed { idx, _ -> idx != i })
-        selected = null
     }
 
     Column(
@@ -138,7 +105,7 @@ fun PlannerScreen(week: WeekPlan, onChange: (WeekPlan) -> Unit, onBack: () -> Un
             Column(Modifier.weight(1f)) {
                 Text("Work schedule", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "tap free space to add · drag to move · handles to resize",
+                    "tap a block to edit · tap free space to add",
                     color = TextSecondary,
                     fontSize = 11.sp
                 )
@@ -176,81 +143,166 @@ fun PlannerScreen(week: WeekPlan, onChange: (WeekPlan) -> Unit, onBack: () -> Un
 
         Spacer(Modifier.height(4.dp))
 
-        Box(Modifier.weight(1f)) {
-            Row(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp)
-            ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp)
+        ) {
+            Row(Modifier.fillMaxWidth()) {
                 TimeAxis()
                 days.forEach { dow ->
                     DayColumn(
                         dow = dow,
                         blocks = week.days.getValue(dow),
                         isToday = dow == today,
-                        selectedIndex = selected?.takeIf { it.first == dow }?.second,
                         minutesPerPatient = week.minutesPerPatient,
-                        onSelect = { i -> selected = if (i == null) null else dow to i },
-                        onAdd = { minute -> addBlock(dow, minute) },
-                        onMove = { i, d -> moveBlock(dow, i, d) },
-                        onResize = { i, top, d -> resizeBlock(dow, i, top, d) },
+                        onEdit = { i, b ->
+                            editing = EditTarget(dow, i, formatMinutes(b.start), formatMinutes(b.end))
+                        },
+                        onAdd = { minute ->
+                            val start = ((minute - 30).coerceAtLeast(AXIS_START) / SNAP) * SNAP
+                            editing = EditTarget(
+                                dow, null,
+                                formatMinutes(start),
+                                formatMinutes(minOf(start + 60, AXIS_END))
+                            )
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
 
-            androidx.compose.animation.AnimatedVisibility(
-                visible = selected != null,
-                enter = slideInVertically { it } + fadeIn(),
-                exit = slideOutVertically { it } + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                val sel = selected
-                val block = sel?.let { week.days.getValue(it.first).getOrNull(it.second) }
-                Row(
+            // "now" line across the whole week
+            val nowMin = now.toSecondOfDay() / 60
+            if (nowMin in AXIS_START..AXIS_END) {
+                Box(
                     Modifier
-                        .padding(16.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(CardColor)
-                        .border(1.dp, GridLine, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (sel != null && block != null) {
-                        Text(
-                            "${sel.first.getDisplayName(TextStyle.SHORT, Locale.getDefault())} " +
-                                "${formatMinutes(block.start)}–${formatMinutes(block.end)}",
-                            color = TextPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(Modifier.width(16.dp))
-                        Text(
-                            "Delete",
-                            color = Color(0xFFF87171),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { deleteSelected() }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                        Text(
-                            "Done",
-                            color = Cyan,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { selected = null }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                }
+                        .offset(y = minutesToDp(nowMin) - 1.dp)
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(NowRed.copy(alpha = 0.85f))
+                )
+                Text(
+                    formatMinutes(nowMin),
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .offset(y = minutesToDp(nowMin) - 8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(NowRed)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
             }
         }
     }
+
+    editing?.let { target ->
+        BlockDialog(
+            target = target,
+            dayBlocks = week.days.getValue(target.dow),
+            onSave = { block ->
+                val list = week.days.getValue(target.dow)
+                val base = if (target.index != null) {
+                    list.filterIndexed { i, _ -> i != target.index }
+                } else list
+                setBlocks(target.dow, (base + block).sortedBy { it.start })
+                editing = null
+            },
+            onDelete = {
+                if (target.index != null) {
+                    setBlocks(
+                        target.dow,
+                        week.days.getValue(target.dow).filterIndexed { i, _ -> i != target.index }
+                    )
+                }
+                editing = null
+            },
+            onDismiss = { editing = null }
+        )
+    }
+}
+
+@Composable
+private fun BlockDialog(
+    target: EditTarget,
+    dayBlocks: List<TimeBlock>,
+    onSave: (TimeBlock) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var startText by remember { mutableStateOf(target.startText) }
+    var endText by remember { mutableStateOf(target.endText) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val dayName = target.dow.getDisplayName(TextStyle.FULL, Locale.getDefault())
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardColor,
+        title = {
+            Text(
+                if (target.index == null) "New block · $dayName" else "Edit block · $dayName",
+                color = TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TimeField("Start", startText, Modifier.weight(1f)) { startText = it; error = null }
+                    TimeField("End", endText, Modifier.weight(1f)) { endText = it; error = null }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    error ?: "e.g. 8:00, 0800 or 14:30",
+                    color = if (error != null) NowRed else TextSecondary,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val s = parseTimeInput(startText)
+                val e = parseTimeInput(endText)
+                val others = dayBlocks.filterIndexed { i, _ -> i != target.index }
+                when {
+                    s == null || e == null -> error = "Enter times like 8:00 or 0800"
+                    e <= s -> error = "End must be after start"
+                    s < AXIS_START || e > AXIS_END ->
+                        error = "Keep it between ${formatMinutes(AXIS_START)} and ${formatMinutes(AXIS_END)}"
+                    others.any { s < it.end && e > it.start } -> error = "Overlaps another block"
+                    else -> onSave(TimeBlock(s, e))
+                }
+            }) { Text("Save", color = Cyan, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            Row {
+                if (target.index != null) {
+                    TextButton(onClick = onDelete) { Text("Delete", color = NowRed) }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) }
+            }
+        }
+    )
+}
+
+@Composable
+private fun TimeField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { if (it.length <= 5) onChange(it) },
+        label = { Text(label, color = TextSecondary) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -275,12 +327,9 @@ private fun DayColumn(
     dow: DayOfWeek,
     blocks: List<TimeBlock>,
     isToday: Boolean,
-    selectedIndex: Int?,
     minutesPerPatient: Int,
-    onSelect: (Int?) -> Unit,
+    onEdit: (Int, TimeBlock) -> Unit,
     onAdd: (Int) -> Unit,
-    onMove: (Int, Int) -> Unit,
-    onResize: (Int, Boolean, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -296,22 +345,18 @@ private fun DayColumn(
                 drawLine(GridLine, Offset(0f, 0f), Offset(0f, size.height), 1f)
                 drawLine(GridLine, Offset(size.width, 0f), Offset(size.width, size.height), 1f)
             }
-            .pointerInput(dow) {
+            .pointerInput(dow, blocks) {
                 detectTapGestures { offset ->
-                    val minute = AXIS_START +
-                        (offset.y / (HOUR_HEIGHT.toPx() / 60f)).toInt()
-                    onAdd(minute)
+                    val minute = AXIS_START + (offset.y / (HOUR_HEIGHT.toPx() / 60f)).toInt()
+                    if (blocks.none { minute >= it.start && minute < it.end }) onAdd(minute)
                 }
             }
     ) {
         blocks.forEachIndexed { i, block ->
             BlockView(
                 block = block,
-                isSelected = i == selectedIndex,
                 minutesPerPatient = minutesPerPatient,
-                onSelect = { onSelect(i) },
-                onMove = { d -> onMove(i, d) },
-                onResize = { top, d -> onResize(i, top, d) },
+                onClick = { onEdit(i, block) },
             )
         }
     }
@@ -320,11 +365,8 @@ private fun DayColumn(
 @Composable
 private fun BlockView(
     block: TimeBlock,
-    isSelected: Boolean,
     minutesPerPatient: Int,
-    onSelect: () -> Unit,
-    onMove: (Int) -> Unit,
-    onResize: (Boolean, Int) -> Unit,
+    onClick: () -> Unit,
 ) {
     val height = HOUR_HEIGHT * (block.duration / 60f)
     Box(
@@ -333,119 +375,42 @@ private fun BlockView(
             .padding(horizontal = 2.dp)
             .fillMaxWidth()
             .height(height)
+            .padding(vertical = 1.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Brush.verticalGradient(listOf(Indigo.copy(alpha = 0.8f), Violet.copy(alpha = 0.8f))))
+            .clickable(onClick = onClick)
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(vertical = 1.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(
-                    Brush.verticalGradient(
-                        if (isSelected) listOf(Indigo, Violet)
-                        else listOf(Indigo.copy(alpha = 0.55f), Violet.copy(alpha = 0.55f))
-                    )
-                )
-                .then(
-                    if (isSelected) Modifier.border(2.dp, Cyan, RoundedCornerShape(8.dp))
-                    else Modifier
-                )
-                .pointerInput(block) {
-                    detectTapGestures { onSelect() }
-                }
-                .pointerInput(block) {
-                    val stepPx = HOUR_HEIGHT.toPx() * SNAP / 60f
-                    var acc = 0f
-                    detectDragGestures(
-                        onDragStart = { onSelect(); acc = 0f },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            acc += amount.y
-                            val steps = (acc / stepPx).toInt()
-                            if (steps != 0) {
-                                acc -= steps * stepPx
-                                onMove(steps * SNAP)
-                            }
-                        }
-                    )
-                }
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
+            Text(
+                formatMinutes(block.start),
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            if (block.duration >= 45) {
                 Text(
-                    formatMinutes(block.start),
-                    color = Color.White,
+                    formatMinutes(block.end),
+                    color = Color.White.copy(alpha = 0.85f),
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
-                if (block.duration >= 45) {
-                    Text(
-                        formatMinutes(block.end),
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 10.sp,
-                        maxLines = 1
-                    )
-                }
-                if (block.duration >= 90 && minutesPerPatient > 0) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "${block.duration / minutesPerPatient} pat.",
-                        color = Cyan,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                }
             }
-        }
-
-        if (isSelected) {
-            ResizeHandle(
-                modifier = Modifier.align(Alignment.TopCenter).offset(y = (-7).dp),
-                onDragSteps = { d -> onResize(true, d) }
-            )
-            ResizeHandle(
-                modifier = Modifier.align(Alignment.BottomCenter).offset(y = 7.dp),
-                onDragSteps = { d -> onResize(false, d) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ResizeHandle(modifier: Modifier, onDragSteps: (Int) -> Unit) {
-    Box(
-        modifier
-            .size(width = 34.dp, height = 14.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(Cyan)
-            .pointerInput(Unit) {
-                val stepPx = HOUR_HEIGHT.toPx() * SNAP / 60f
-                var acc = 0f
-                detectDragGestures(
-                    onDragStart = { acc = 0f },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        acc += amount.y
-                        val steps = (acc / stepPx).toInt()
-                        if (steps != 0) {
-                            acc -= steps * stepPx
-                            onDragSteps(steps * SNAP)
-                        }
-                    }
+            if (block.duration >= 90 && minutesPerPatient > 0) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${block.duration / minutesPerPatient} pat.",
+                    color = Cyan,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
             }
-    ) {
-        Box(
-            Modifier
-                .align(Alignment.Center)
-                .size(width = 14.dp, height = 3.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(BgTop)
-        )
+        }
     }
 }
 

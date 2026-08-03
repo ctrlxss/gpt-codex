@@ -55,7 +55,7 @@ val TrackColor = Color(0xFF1E2C48)
 val TextPrimary = Color(0xFFF1F5F9)
 val TextSecondary = Color(0xFF8FA3C0)
 
-enum class Screen { Home, Planner }
+enum class Screen { Home, Planner, Stats }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,7 +69,9 @@ class MainActivity : ComponentActivity() {
 fun CoreSystemApp() {
     val context = LocalContext.current
     val store = remember { ScheduleStore(context) }
+    val attStore = remember { AttendanceStore(context) }
     var week by remember { mutableStateOf(store.load()) }
+    var todayRecord by remember { mutableStateOf(attStore.get(java.time.LocalDate.now())) }
     var screen by remember { mutableStateOf(Screen.Home) }
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -106,7 +108,33 @@ fun CoreSystemApp() {
                 label = "screens"
             ) { current ->
                 when (current) {
-                    Screen.Home -> TodayScreen(week = week, onOpenMenu = { menuOpen = true })
+                    Screen.Home -> TodayScreen(
+                        week = week,
+                        record = todayRecord,
+                        onToggleSick = {
+                            val d = java.time.LocalDate.now()
+                            val r = attStore.get(d).let { it.copy(sick = !it.sick) }
+                            attStore.set(d, r)
+                            todayRecord = r
+                        },
+                        onToggleClockOut = {
+                            val d = java.time.LocalDate.now()
+                            val cur = attStore.get(d)
+                            val r = if (cur.clockOut == null) {
+                                cur.copy(clockOut = java.time.LocalTime.now().toSecondOfDay() / 60)
+                            } else {
+                                cur.copy(clockOut = null)
+                            }
+                            attStore.set(d, r)
+                            todayRecord = r
+                        },
+                        onOpenMenu = { menuOpen = true }
+                    )
+                    Screen.Stats -> StatsScreen(
+                        week = week,
+                        store = attStore,
+                        onBack = { screen = Screen.Home }
+                    )
                     Screen.Planner -> PlannerScreen(
                         week = week,
                         onChange = { updated ->
@@ -135,6 +163,10 @@ fun CoreSystemApp() {
                     onOpenPlanner = {
                         menuOpen = false
                         screen = Screen.Planner
+                    },
+                    onOpenStats = {
+                        menuOpen = false
+                        screen = Screen.Stats
                     }
                 )
             }
@@ -143,7 +175,7 @@ fun CoreSystemApp() {
 }
 
 @Composable
-private fun SideMenu(onOpenPlanner: () -> Unit) {
+private fun SideMenu(onOpenPlanner: () -> Unit, onOpenStats: () -> Unit) {
     Column(
         Modifier
             .fillMaxHeight()
@@ -169,6 +201,7 @@ private fun SideMenu(onOpenPlanner: () -> Unit) {
         Spacer(Modifier.height(28.dp))
 
         MenuItem("📅", "Work schedule", "week planner & patient slots", enabled = true, onClick = onOpenPlanner)
+        MenuItem("📊", "Hours & attendance", "monthly hours, sick days, early leaves", enabled = true, onClick = onOpenStats)
         MenuItem("⏰", "Reminders", "coming soon", enabled = false)
         MenuItem("✅", "Tasks", "coming soon", enabled = false)
         MenuItem("💡", "Plans & ideas", "coming soon", enabled = false)
