@@ -5,21 +5,21 @@ import java.time.DayOfWeek
 import java.time.LocalTime
 import kotlin.math.ceil
 
-/** Times are stored as minutes since midnight. */
-data class DaySchedule(
-    val enabled: Boolean = true,
-    val workStart: Int = 8 * 60,
-    val workEnd: Int = 17 * 60,
-    val breakStart: Int = 12 * 60,
-    val breakEnd: Int = 12 * 60 + 30,
-)
+/** A continuous stretch of work. Times are minutes since midnight. */
+data class TimeBlock(val start: Int, val end: Int) {
+    val duration: Int get() = end - start
+}
 
-data class WeekSchedule(
-    val days: Map<DayOfWeek, DaySchedule> = DayOfWeek.entries
+data class WeekPlan(
+    val days: Map<DayOfWeek, List<TimeBlock>> = DayOfWeek.entries
         .filter { it.value in 1..5 }
-        .associateWith { DaySchedule() },
+        .associateWith { DEFAULT_BLOCKS },
     val minutesPerPatient: Int = 20,
-)
+) {
+    companion object {
+        val DEFAULT_BLOCKS = listOf(TimeBlock(8 * 60, 12 * 60), TimeBlock(12 * 60 + 30, 17 * 60))
+    }
+}
 
 enum class DayPhase { OFF, BEFORE, WORKING, BREAK, DONE }
 
@@ -28,78 +28,100 @@ data class DayStatus(
     val progress: Float,
     val secondsUntilStart: Long,
     val secondsUntilEnd: Long,
-    val secondsUntilBreakEnd: Long,
+    val secondsUntilNextBlock: Long,
     val remainingWorkSeconds: Long,
     val totalWorkSeconds: Long,
     val patientsLeft: Int,
     val totalPatients: Int,
 )
 
-fun computeStatus(day: DaySchedule?, now: LocalTime, minutesPerPatient: Int): DayStatus {
+/** Blocks must be sorted and non-overlapping — the planner guarantees both. */
+fun computeStatus(blocks: List<TimeBlock>, now: LocalTime, minutesPerPatient: Int): DayStatus {
     val off = DayStatus(DayPhase.OFF, 0f, 0, 0, 0, 0, 0, 0, 0)
-    if (day == null || !day.enabled) return off
+    if (blocks.isEmpty()) return off
 
     val t = now.toSecondOfDay().toLong()
-    val ws = day.workStart * 60L
-    val we = day.workEnd * 60L
-    if (we <= ws) return off
+    val total = blocks.sumOf { it.duration * 60L }
+    if (total <= 0) return off
 
-    // Clamp the break inside the work window so a misconfigured break can't break the math.
-    val bs = (day.breakStart * 60L).coerceIn(ws, we)
-    val be = (day.breakEnd * 60L).coerceIn(bs, we)
-
-    val totalWork = (we - ws) - (be - bs)
-    val worked = ((t.coerceIn(ws, we) - ws) - (t.coerceIn(bs, be) - bs)).coerceAtLeast(0)
-    val remaining = (totalWork - worked).coerceAtLeast(0)
-
-    val phase = when {
-        t < ws -> DayPhase.BEFORE
-        t >= we -> DayPhase.DONE
-        t in bs until be -> DayPhase.BREAK
-        else -> DayPhase.WORKING
+    var worked = 0L
+    for (b in blocks) {
+        worked += t.coerceIn(b.start * 60L, b.end * 60L) - b.start * 60L
     }
+    val remaining = (total - worked).coerceAtLeast(0)
+
+    val firstStart = blocks.first().start * 60L
+    val lastEnd = blocks.last().end * 60L
+    val phase = when {
+        t < firstStart -> DayPhase.BEFORE
+        t >= lastEnd -> DayPhase.DONE
+        blocks.any { t >= it.start * 60L && t < it.end * 60L } -> DayPhase.WORKING
+        else -> DayPhase.BREAK
+    }
+    val nextStart = blocks.firstOrNull { it.start * 60L > t }?.let { it.start * 60L } ?: lastEnd
 
     val slot = minutesPerPatient * 60L
     return DayStatus(
         phase = phase,
-        progress = if (totalWork > 0) (worked.toFloat() / totalWork).coerceIn(0f, 1f) else 0f,
-        secondsUntilStart = (ws - t).coerceAtLeast(0),
-        secondsUntilEnd = (we - t).coerceAtLeast(0),
-        secondsUntilBreakEnd = (be - t).coerceAtLeast(0),
+        progress = (worked.toFloat() / total).coerceIn(0f, 1f),
+        secondsUntilStart = (firstStart - t).coerceAtLeast(0),
+        secondsUntilEnd = (lastEnd - t).coerceAtLeast(0),
+        secondsUntilNextBlock = (nextStart - t).coerceAtLeast(0),
         remainingWorkSeconds = remaining,
-        totalWorkSeconds = totalWork,
+        totalWorkSeconds = total,
         patientsLeft = if (slot > 0) ceil(remaining / slot.toDouble()).toInt() else 0,
-        totalPatients = if (slot > 0) ceil(totalWork / slot.toDouble()).toInt() else 0,
+        totalPatients = if (slot > 0) ceil(total / slot.toDouble()).toInt() else 0,
     )
 }
 
 class ScheduleStore(context: Context) {
     private val prefs = context.getSharedPreferences("schedule", Context.MODE_PRIVATE)
 
-    fun load(): WeekSchedule {
-        val defaults = WeekSchedule()
-        val days = defaults.days.mapValues { (dow, def) ->
-            val raw = prefs.getString("day_${dow.value}", null) ?: return@mapValues def
-            val p = raw.split("|")
-            if (p.size != 5) def else DaySchedule(
-                enabled = p[0] == "1",
-                workStart = p[1].toIntOrNull() ?: def.workStart,
-                workEnd = p[2].toIntOrNull() ?: def.workEnd,
-                breakStart = p[3].toIntOrNull() ?: def.breakStart,
-                breakEnd = p[4].toIntOrNull() ?: def.breakEnd,
-            )
+    fun load(): WeekPlan {
+        val days = WeekPlan().days.mapValues { (dow, defaults) ->
+            val raw = prefs.getString("blocks_${dow.value}", null)
+            when {
+                raw != null -> parseBlocks(raw)
+                else -> migrateLegacy(dow) ?: defaults
+            }
         }
-        return WeekSchedule(days, prefs.getInt("minutes_per_patient", 20))
+        return WeekPlan(days, prefs.getInt("minutes_per_patient", 20))
     }
 
-    fun save(week: WeekSchedule) {
+    fun save(week: WeekPlan) {
         val editor = prefs.edit()
-        week.days.forEach { (dow, d) ->
-            val e = if (d.enabled) "1" else "0"
-            editor.putString("day_${dow.value}", "$e|${d.workStart}|${d.workEnd}|${d.breakStart}|${d.breakEnd}")
+        week.days.forEach { (dow, blocks) ->
+            editor.putString(
+                "blocks_${dow.value}",
+                blocks.joinToString(",") { "${it.start}-${it.end}" }
+            )
         }
         editor.putInt("minutes_per_patient", week.minutesPerPatient)
         editor.apply()
+    }
+
+    private fun parseBlocks(raw: String): List<TimeBlock> =
+        raw.split(",")
+            .mapNotNull { part ->
+                val p = part.split("-")
+                if (p.size != 2) return@mapNotNull null
+                val s = p[0].toIntOrNull() ?: return@mapNotNull null
+                val e = p[1].toIntOrNull() ?: return@mapNotNull null
+                if (e > s) TimeBlock(s, e) else null
+            }
+            .sortedBy { it.start }
+
+    /** v1 stored "enabled|workStart|workEnd|breakStart|breakEnd" per day. */
+    private fun migrateLegacy(dow: DayOfWeek): List<TimeBlock>? {
+        val raw = prefs.getString("day_${dow.value}", null) ?: return null
+        val p = raw.split("|")
+        if (p.size != 5) return null
+        if (p[0] != "1") return emptyList()
+        val ws = p[1].toIntOrNull() ?: return null
+        val we = p[2].toIntOrNull() ?: return null
+        val bs = (p[3].toIntOrNull() ?: return null).coerceIn(ws, we)
+        val be = (p[4].toIntOrNull() ?: return null).coerceIn(bs, we)
+        return listOf(TimeBlock(ws, bs), TimeBlock(be, we)).filter { it.duration > 0 }
     }
 }
 
@@ -110,4 +132,10 @@ fun formatCountdown(totalSeconds: Long): String {
     val m = (totalSeconds % 3600) / 60
     val s = totalSeconds % 60
     return "%d:%02d:%02d".format(h, m, s)
+}
+
+fun formatDuration(totalSeconds: Long): String {
+    val h = totalSeconds / 3600
+    val m = (totalSeconds % 3600) / 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
 }

@@ -35,7 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -64,7 +64,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 @Composable
-fun TodayScreen(week: WeekSchedule, onOpenSettings: () -> Unit) {
+fun TodayScreen(week: WeekPlan, onOpenMenu: () -> Unit) {
     var now by remember { mutableStateOf(LocalTime.now()) }
     var today by remember { mutableStateOf(LocalDate.now()) }
     LaunchedEffect(Unit) {
@@ -75,8 +75,8 @@ fun TodayScreen(week: WeekSchedule, onOpenSettings: () -> Unit) {
         }
     }
 
-    val day = week.days[today.dayOfWeek]
-    val status = computeStatus(day, now, week.minutesPerPatient)
+    val blocks = week.days[today.dayOfWeek] ?: emptyList()
+    val status = computeStatus(blocks, now, week.minutesPerPatient)
 
     Column(
         Modifier
@@ -89,29 +89,37 @@ fun TodayScreen(week: WeekSchedule, onOpenSettings: () -> Unit) {
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(onClick = onOpenMenu) {
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = TextSecondary)
+            }
+            Spacer(Modifier.width(4.dp))
             Column(Modifier.weight(1f)) {
+                Text(
+                    "CORE SYSTEM",
+                    color = Cyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.5.sp
+                )
                 Text(
                     today.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.getDefault()),
                     color = TextPrimary,
-                    fontSize = 26.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     today.format(DateTimeFormatter.ofPattern("d MMMM yyyy")),
                     color = TextSecondary,
-                    fontSize = 14.sp
+                    fontSize = 13.sp
                 )
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Default.Settings, contentDescription = "Schedule", tint = TextSecondary)
             }
         }
 
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(32.dp))
 
         when (status.phase) {
             DayPhase.OFF -> OffCard()
-            else -> ProgressSection(status, day!!)
+            else -> ProgressSection(status, blocks)
         }
 
         Spacer(Modifier.height(24.dp))
@@ -119,7 +127,7 @@ fun TodayScreen(week: WeekSchedule, onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun ProgressSection(status: DayStatus, day: DaySchedule) {
+private fun ProgressSection(status: DayStatus, blocks: List<TimeBlock>) {
     val animatedProgress by animateFloatAsState(
         targetValue = status.progress,
         animationSpec = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
@@ -156,8 +164,8 @@ private fun ProgressSection(status: DayStatus, day: DaySchedule) {
                 CountdownText(status.secondsUntilStart)
             }
             DayPhase.BREAK -> {
-                Text("break ends in", color = TextSecondary, fontSize = 14.sp)
-                CountdownText(status.secondsUntilBreakEnd)
+                Text("break — next block in", color = TextSecondary, fontSize = 14.sp)
+                CountdownText(status.secondsUntilNextBlock)
             }
             DayPhase.DONE -> {
                 Text("🎉", fontSize = 40.sp)
@@ -195,13 +203,14 @@ private fun ProgressSection(status: DayStatus, day: DaySchedule) {
                 accent = Violet
             ) {
                 Text(
-                    formatMinutes(day.workEnd),
+                    formatMinutes(blocks.last().end),
                     color = TextPrimary,
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "break ${formatMinutes(day.breakStart)}–${formatMinutes(day.breakEnd)}",
+                    "${blocks.size} block${if (blocks.size == 1) "" else "s"} · " +
+                        formatDuration(status.totalWorkSeconds) + " work",
                     color = TextSecondary,
                     fontSize = 12.sp
                 )

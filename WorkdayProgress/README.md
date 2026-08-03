@@ -1,22 +1,31 @@
-# Workday Progress
+# Core System
 
-A small Android app that shows how far along your workday is — like a loading bar for your day.
+An Android app meant to grow into one place for everything — starting with your workday.
 
-## Features
+## Modules
+
+### Workday progress
 
 - **Today screen** — animated progress bar with a shimmer sweep, big percentage, and a live
   `h:mm:ss` countdown until you're finished.
 - **Patients left** — counts how many patients are still ahead of you, based on your remaining
   working time and a configurable slot length (default **20 minutes per patient**).
-- **Mon–Fri schedule** — set work start/end and break start/end per weekday; days can be toggled
-  off. Everything is saved on the device.
-- Phase-aware: shows "work starts in…", pauses progress during your break ("break ends in…"),
-  and celebrates when you're done. Weekends show a day-off screen.
+- **Week planner** — a calendar-style Mon–Fri grid (time axis on the left). Each day holds any
+  number of work blocks: tap free space to add one, drag a block to move it, drag the handles to
+  resize, all snapping to 15 minutes. Gaps between blocks are breaks — so "morning block,
+  3 h break, 2 patients, 1 h break, 3 patients" works naturally. Everything is saved on device.
+- Phase-aware: "work starts in…", live progress while working, paused progress between blocks
+  ("break — next block in…"), and a done state. Days without blocks show a day-off screen.
+
+### Coming soon
+
+The side menu is the home for future modules: reminders, tasks, plans & ideas.
 
 ## Install
 
-Download `apk/workday-progress-v1.0.apk` onto your phone and open it
+Download `apk/core-system-v2.0.apk` onto your phone and open it
 (you may need to allow "install from unknown sources"). Requires Android 8.0+.
+Installs as an update over the previous "Workday" version.
 
 ## Build
 
